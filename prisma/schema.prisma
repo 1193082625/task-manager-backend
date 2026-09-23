@@ -1,0 +1,96 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// @@map("users) 数据库表名使用 users
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String @unique
+  passwordHash String
+  role      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关系字段，不会额外生成同名数据库列
+  ownedProjects Project[] @relation("ProjectPrincipal")
+  assignedTasks Task[]    @relation("TaskPrincipal")
+
+  @@map("users")
+}
+
+enum ProjectStage {
+  setup
+  design
+  development
+  test
+}
+
+enum WorkStatus {
+  notStarted
+  doing
+  stopped
+  completed
+  canceled
+}
+
+model Project {
+  id            String       @id @default(uuid())
+  name          String
+  description   String       @default("")
+  startTime     DateTime     @db.Date
+  endTime       DateTime     @db.Date
+  realStartTime DateTime?    @db.Date
+  realEndTime   DateTime?    @db.Date
+  stage         ProjectStage @default(setup)
+  status        WorkStatus   @default(notStarted)
+
+  // 数据库中实际存储的外键列
+  principalId String
+  principal   User   @relation("ProjectPrincipal", fields: [principalId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks Task[]
+
+  // 为按负责任查询项目建立索引 
+  @@index([principalId])
+  @@map("projects")
+}
+
+model Task {
+  id          String     @id @default(uuid())
+  name        String
+  description String     @default("")
+  status      WorkStatus @default(notStarted)
+
+  // @db.Timestamptz(3) 表示使用 PostgreSQL 的带时区时间戳，保留毫秒精度
+  startTime     DateTime  @db.Timestamptz(3)
+  endTime       DateTime  @db.Timestamptz(3)
+  realStartTime DateTime? @db.Timestamptz(3)
+  realEndTime   DateTime? @db.Timestamptz(3)
+
+  principalId String
+  principal   User   @relation("TaskPrincipal", fields: [principalId], references: [id], onDelete: Restrict)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([principalId])
+  @@index([projectId])
+  @@map("tasks")
+}
