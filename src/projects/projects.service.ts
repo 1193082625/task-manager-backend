@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -57,7 +58,7 @@ export class ProjectsService {
     };
   }
 
-  async create(dto: CreateProjectDto) {
+  async create(dto: CreateProjectDto, creatorId: string) {
     if (dto.endTime < dto.startTime) {
       throw new BadRequestException('结束日期不能早于开始日期');
     }
@@ -72,17 +73,33 @@ export class ProjectsService {
     }
 
     try {
-      const project = await this.prisma.project.create({
-        data: {
-          name: dto.name.trim(),
-          description: dto.description ?? '',
-          principalId: dto.principalId,
-          startTime: new Date(`${dto.startTime}T00:00:00.000Z`),
-          endTime: new Date(`${dto.endTime}T00:00:00.000Z`),
-        },
-        include: projectTaskInclude, // 表示除了项目自身字段，还要带哪些关联数据
-      });
+      const project = await this.prisma.$transaction(async (tx) => {
+        const createdProject = await tx.project.create({
+          data: {
+            name: dto.name.trim(),
+            description: dto.description ?? '',
+            principalId: dto.principalId,
+            startTime: new Date(`${dto.startTime}T00:00:00.000Z`),
+            endTime: new Date(`${dto.endTime}T00:00:00.000Z`),
+          },
+          include: projectTaskInclude, // 表示除了项目自身字段，还要带哪些关联数据
+        });
+        await tx.projectMember.createMany({
+          data: [
+            {
+              projectId: createdProject.id,
+              userId: creatorId,
+            },
+            {
+              projectId: createdProject.id,
+              userId: dto.principalId,
+            },
+          ],
+          skipDuplicates: true,
+        });
 
+        return createdProject;
+      });
       return this.toResponse(project);
     } catch (error) {
       if (
@@ -96,7 +113,10 @@ export class ProjectsService {
     }
   }
 
-  async findOne(id: string): Promise<ProjectResponseDto> {
+  async findOne(
+    id: string,
+    currentUserId: string,
+  ): Promise<ProjectResponseDto> {
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: projectTaskInclude,
@@ -105,14 +125,40 @@ export class ProjectsService {
     if (!project) {
       throw new NotFoundException('项目不存在');
     }
+
+    const membership = await this.prisma.projectMember.findUnique({
+      where: {
+        projectId_userId: {
+          projectId: id,
+          userId: currentUserId,
+        },
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('你不是该项目成员');
+    }
     return this.toResponse(project);
   }
 
-  async findAll(query: QueryProjectsDto): Promise<ProjectListResponseDto> {
+  async findAll(
+    query: QueryProjectsDto,
+    currentUserId: string,
+  ): Promise<ProjectListResponseDto> {
     const { page, limit, principalId, stage, status } = query;
     const name = query.name?.trim();
 
-    const where: Prisma.ProjectWhereInput = {};
+    // 表示 查询 Project 的 members 中 至少 some 一条记录， userId 等于当前登录用户
+    const where: Prisma.ProjectWhereInput = {
+      members: {
+        some: {
+          userId: currentUserId,
+        },
+      },
+    };
 
     if (name) {
       where.name = {
@@ -241,7 +287,11 @@ export class ProjectsService {
     };
   }
 
-  async update(id: string, dto: UpdateProjectDto): Promise<ProjectResponseDto> {
+  async update(
+    id: string,
+    dto: UpdateProjectDto,
+    currentUserId: string,
+  ): Promise<ProjectResponseDto> {
     const values = [
       dto.name,
       dto.description,
@@ -263,6 +313,36 @@ export class ProjectsService {
 
           if (!project) {
             throw new NotFoundException('项目不存在');
+          }
+
+          if (project.principalId !== currentUserId) {
+            throw new ForbiddenException('只有项目负责人可以编辑项目');
+          }
+
+          if (dto.principalId !== undefined) {
+            const principal = await tx.user.findUnique({
+              where: { id: dto.principalId },
+              select: { id: true },
+            });
+
+            if (!principal) {
+              throw new BadRequestException('负责人不存在');
+            }
+
+            // upsert: 新负责人已经是成员则不做任何修改，新负责人不是成员，则创建 ProjectMember
+            await tx.projectMember.upsert({
+              where: {
+                projectId_userId: {
+                  projectId: id,
+                  userId: dto.principalId,
+                },
+              },
+              update: {},
+              create: {
+                projectId: id,
+                userId: dto.principalId,
+              },
+            });
           }
 
           const startTime =
@@ -344,8 +424,15 @@ export class ProjectsService {
     }
   }
 
-  async findAllOptions(): Promise<ProjectResponseDto[]> {
+  async findAllOptions(currentUserId: string): Promise<ProjectResponseDto[]> {
     const projects = await this.prisma.project.findMany({
+      where: {
+        members: {
+          some: {
+            userId: currentUserId,
+          },
+        },
+      },
       include: projectTaskInclude,
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
     });
@@ -353,10 +440,26 @@ export class ProjectsService {
     return projects.map((project) => this.toResponse(project));
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, currentUserId: string): Promise<void> {
     try {
-      await this.prisma.project.delete({
-        where: { id },
+      await this.prisma.$transaction(async (tx) => {
+        const project = await tx.project.findUnique({
+          where: { id },
+          select: {
+            principalId: true,
+          },
+        });
+
+        if (!project) {
+          throw new NotFoundException('项目不存在');
+        }
+
+        if (project.principalId !== currentUserId) {
+          throw new ForbiddenException('只有项目负责人可以删除项目');
+        }
+        await tx.project.delete({
+          where: { id },
+        });
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError) {

@@ -30,8 +30,11 @@ import {
 } from './dto/user-response.dto.js';
 import { QueryUsersDto } from './dto/query.users.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
+import { Roles } from '../auth/roles.decorator.js';
+import { SystemRole } from '../generated/prisma/enums.js';
 
 @ApiTags('用户管理')
+@Roles(SystemRole.ADMIN)
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -57,6 +60,7 @@ export class UsersController {
 
   // 要放在动态路由前，先匹配
   @Get('all')
+  @Roles(SystemRole.USER, SystemRole.ADMIN)
   @ApiOperation({ summary: '查询负责任下拉选项' })
   @ApiOkResponse({
     type: UserResponseDto,

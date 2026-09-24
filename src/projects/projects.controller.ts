@@ -21,6 +21,7 @@ import {
   ApiTags,
   ApiConflictResponse,
   ApiNoContentResponse,
+  ApiForbiddenResponse,
 } from '@nestjs/swagger';
 import { ProjectsService } from './projects.service.js';
 import { CreateProjectDto } from './dto/create-project.dto.js';
@@ -30,6 +31,7 @@ import {
 } from './dto/project-response.dto.js';
 import { QueryProjectsDto } from './dto/query-projects.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
+import { CurrentUserId } from '../auth/current-user-id.decorator.js';
 
 @ApiTags('项目管理')
 @Controller('projects')
@@ -42,8 +44,8 @@ export class ProjectsController {
   @ApiBadRequestResponse({
     description: '参数不合法、日期顺序错误或负责人不存在',
   })
-  create(@Body() dto: CreateProjectDto) {
-    return this.projectsService.create(dto);
+  create(@CurrentUserId() creatorId: string, @Body() dto: CreateProjectDto) {
+    return this.projectsService.create(dto, creatorId);
   }
 
   @Get('all')
@@ -52,8 +54,8 @@ export class ProjectsController {
     type: ProjectResponseDto,
     isArray: true,
   })
-  findAllOptions() {
-    return this.projectsService.findAllOptions();
+  findAllOptions(@CurrentUserId() currentUserId: string) {
+    return this.projectsService.findAllOptions(currentUserId);
   }
 
   @Get(':id')
@@ -62,8 +64,12 @@ export class ProjectsController {
   @ApiOkResponse({ type: ProjectResponseDto })
   @ApiBadRequestResponse({ description: '项目 ID 格式不正确' })
   @ApiNotFoundResponse({ description: '项目不存在' })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.projectsService.findOne(id);
+  @ApiForbiddenResponse({ description: '当前用户不是项目成员' })
+  findOne(
+    @CurrentUserId() currentUserId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.projectsService.findOne(id, currentUserId);
   }
 
   @Get()
@@ -74,8 +80,11 @@ export class ProjectsController {
   })
   @ApiOkResponse({ type: ProjectListResponseDto })
   @ApiBadRequestResponse({ description: '查询参数不合法' })
-  findAll(@Query() query: QueryProjectsDto) {
-    return this.projectsService.findAll(query);
+  findAll(
+    @CurrentUserId() currentUserId: string,
+    @Query() query: QueryProjectsDto,
+  ) {
+    return this.projectsService.findAll(query, currentUserId);
   }
 
   @Patch(':id')
@@ -91,10 +100,11 @@ export class ProjectsController {
   @ApiNotFoundResponse({ description: '项目不存在' })
   @ApiConflictResponse({ description: '并发修改冲突，请刷新后重试' })
   update(
+    @CurrentUserId() currentUserId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateProjectDto,
   ) {
-    return this.projectsService.update(id, dto);
+    return this.projectsService.update(id, dto, currentUserId);
   }
 
   @Delete(':id')
@@ -105,7 +115,10 @@ export class ProjectsController {
   @ApiBadRequestResponse({ description: '项目 ID 格式不正确' })
   @ApiNotFoundResponse({ description: '项目不存在' })
   @ApiConflictResponse({ description: '项目下仍有任务，不能删除' })
-  async remove(@Param('id', new ParseUUIDPipe()) id: string): Promise<void> {
-    return this.projectsService.remove(id);
+  async remove(
+    @CurrentUserId() currentUserId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<void> {
+    return this.projectsService.remove(id, currentUserId);
   }
 }

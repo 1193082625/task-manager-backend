@@ -22,6 +22,7 @@ export class AuthService {
         name: true,
         phone: true,
         role: true,
+        systemRole: true,
       },
     });
     if (!user) {
@@ -40,6 +41,7 @@ export class AuthService {
         name: true,
         phone: true,
         role: true,
+        systemRole: true,
         passwordHash: true,
       },
     });
@@ -63,6 +65,7 @@ export class AuthService {
     const token = await this.jwtService.signAsync(
       {
         sub: user.id,
+        systemRole: user.systemRole,
       },
       {
         expiresIn,
@@ -76,6 +79,7 @@ export class AuthService {
         name: user.name,
         phone: user.phone,
         role: user.role,
+        systemRole: user.systemRole,
       },
     };
   }

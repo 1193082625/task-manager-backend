@@ -15,6 +15,7 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -31,6 +32,7 @@ import {
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto.js';
 import { QueryTasksDto } from './dto/query-tasks.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
+import { CurrentUserId } from '../auth/current-user-id.decorator.js';
 
 @ApiTags('任务管理')
 @Controller('tasks')
@@ -43,8 +45,8 @@ export class TasksController {
   @ApiBadRequestResponse({
     description: '参数不合法、日期顺序错误或关联对象不存在',
   })
-  create(@Body() dto: CreateTaskDto) {
-    return this.tasksService.create(dto);
+  create(@CurrentUserId() currentUserId: string, @Body() dto: CreateTaskDto) {
+    return this.tasksService.create(dto, currentUserId);
   }
 
   @Get(':id')
@@ -53,8 +55,12 @@ export class TasksController {
   @ApiOkResponse({ type: TaskResponseDto })
   @ApiBadRequestResponse({ description: '任务 ID 格式不正确' })
   @ApiNotFoundResponse({ description: '任务不存在' })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.tasksService.findOne(id);
+  @ApiForbiddenResponse({ description: '当前用户无权查看该任务' })
+  findOne(
+    @CurrentUserId() currentUserId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.tasksService.findOne(id, currentUserId);
   }
 
   @Patch(':id/status')
@@ -66,11 +72,15 @@ export class TasksController {
   @ApiConflictResponse({
     description: '状态转换不允许、时间数据异常或并发修改冲突',
   })
+  @ApiForbiddenResponse({
+    description: '只有项目负责人或任务负责人可以变更状态',
+  })
   updateStatus(
+    @CurrentUserId() currentUserId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateTaskStatusDto,
   ) {
-    return this.tasksService.updateStatus(id, dto);
+    return this.tasksService.updateStatus(id, dto, currentUserId);
   }
 
   @Get()
@@ -81,8 +91,11 @@ export class TasksController {
   })
   @ApiOkResponse({ type: TaskListResponseDto })
   @ApiBadRequestResponse({ description: '查询参数不合法' })
-  findAll(@Query() query: QueryTasksDto) {
-    return this.tasksService.findAll(query);
+  findAll(
+    @CurrentUserId() currentUserId: string,
+    @Query() query: QueryTasksDto,
+  ) {
+    return this.tasksService.findAll(query, currentUserId);
   }
 
   @Patch(':id')
@@ -97,11 +110,13 @@ export class TasksController {
   })
   @ApiNotFoundResponse({ description: '任务不存在' })
   @ApiConflictResponse({ description: '并发修改冲突，请刷新后重试' })
+  @ApiForbiddenResponse({ description: '当前用户无权编辑任务或修改任务归属' })
   update(
+    @CurrentUserId() currentUserId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateTaskDto,
   ) {
-    return this.tasksService.update(id, dto);
+    return this.tasksService.update(id, dto, currentUserId);
   }
 
   @Delete(':id')
@@ -111,7 +126,11 @@ export class TasksController {
   @ApiNoContentResponse({ description: '删除成功，无响应体' })
   @ApiBadRequestResponse({ description: '任务 ID 格式不正确' })
   @ApiNotFoundResponse({ description: '任务不存在' })
-  async remove(@Param('id', new ParseUUIDPipe()) id: string): Promise<void> {
-    await this.tasksService.remove(id);
+  @ApiForbiddenResponse({ description: '当前用户无权删除任务' })
+  async remove(
+    @CurrentUserId() currentUserId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<void> {
+    await this.tasksService.remove(id, currentUserId);
   }
 }

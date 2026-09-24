@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -42,7 +43,7 @@ export class TasksService {
     };
   }
 
-  async create(dto: CreateTaskDto) {
+  async create(dto: CreateTaskDto, currentUserId: string) {
     const startTime = new Date(dto.startTime);
     const endTime = new Date(dto.endTime);
 
@@ -66,14 +67,38 @@ export class TasksService {
       throw new BadRequestException('负责人不存在，请重新选择');
     }
 
-    if (dto.projectId !== null && dto.projectId !== undefined) {
+    if (dto.projectId === null || dto.projectId === undefined) {
+      if (dto.principalId !== currentUserId) {
+        throw new ForbiddenException('独立任务只能分配给自己');
+      }
+    } else {
       const project = await this.prisma.project.findUnique({
         where: { id: dto.projectId },
-        select: { id: true },
+        select: {
+          members: {
+            where: {
+              userId: {
+                in: [currentUserId, dto.principalId],
+              },
+            },
+            select: {
+              userId: true,
+            },
+          },
+        },
       });
 
       if (!project) {
         throw new BadRequestException('项目不存在，请重新选择');
+      }
+
+      const memberIds = new Set(project.members.map((member) => member.userId));
+      if (!memberIds.has(currentUserId)) {
+        throw new ForbiddenException('你不是该项目成员，不能创建任务');
+      }
+
+      if (!memberIds.has(dto.principalId)) {
+        throw new BadRequestException('任务负责人必须是项目成员');
       }
     }
 
@@ -101,7 +126,7 @@ export class TasksService {
     }
   }
 
-  async findOne(id: string): Promise<TaskResponseDto> {
+  async findOne(id: string, currentUserId: string): Promise<TaskResponseDto> {
     const task = await this.prisma.task.findUnique({
       where: { id },
     });
@@ -109,12 +134,36 @@ export class TasksService {
     if (!task) {
       throw new NotFoundException('任务不存在');
     }
+    if (task.projectId === null) {
+      if (task.principalId !== currentUserId) {
+        throw new ForbiddenException('无权查看该任务');
+      }
+      return this.toResponse(task);
+    }
+
+    const membership = await this.prisma.projectMember.findUnique({
+      where: {
+        projectId_userId: {
+          projectId: task.projectId,
+          userId: currentUserId,
+        },
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('你不是该任务所属项目的成员');
+    }
+
     return this.toResponse(task);
   }
 
   async updateStatus(
     id: string,
     dto: UpdateTaskStatusDto,
+    currentUserId: string,
   ): Promise<TaskResponseDto> {
     try {
       // 这段代码用了事务：将“读取当前任务、判断规则、写入变化”放在痛一个数据库事务中
@@ -124,10 +173,26 @@ export class TasksService {
         async (tx) => {
           const task = await tx.task.findUnique({
             where: { id },
+            include: {
+              project: {
+                select: {
+                  principalId: true,
+                },
+              },
+            },
           });
 
           if (!task) {
             throw new NotFoundException('任务不存在');
+          }
+
+          const canChangeStatus =
+            task.principalId === currentUserId ||
+            task.project?.principalId === currentUserId;
+          if (!canChangeStatus) {
+            throw new ForbiddenException(
+              '只有项目负责人或任务负责人可以变更任务状态',
+            );
           }
 
           const targetStatus = dto.status;
@@ -203,11 +268,32 @@ export class TasksService {
     }
   }
 
-  async findAll(query: QueryTasksDto): Promise<TaskListResponseDto> {
+  async findAll(
+    query: QueryTasksDto,
+    currentUserId: string,
+  ): Promise<TaskListResponseDto> {
     const { page, limit, projectId, principalId, status } = query;
     const name = query.name?.trim();
 
-    const where: Prisma.TaskWhereInput = {};
+    const where: Prisma.TaskWhereInput = {
+      OR: [
+        {
+          projectId: null,
+          principalId: currentUserId,
+        },
+        {
+          project: {
+            is: {
+              members: {
+                some: {
+                  userId: currentUserId,
+                },
+              },
+            },
+          },
+        },
+      ],
+    };
 
     if (name) {
       where.name = {
@@ -299,7 +385,11 @@ export class TasksService {
     };
   }
 
-  async update(id: string, dto: UpdateTaskDto): Promise<TaskResponseDto> {
+  async update(
+    id: string,
+    dto: UpdateTaskDto,
+    currentUserId: string,
+  ): Promise<TaskResponseDto> {
     const values = [
       dto.name,
       dto.description,
@@ -318,10 +408,80 @@ export class TasksService {
         async (tx) => {
           const task = await tx.task.findUnique({
             where: { id },
+            include: {
+              project: {
+                select: {
+                  principalId: true,
+                },
+              },
+            },
           });
 
           if (!task) {
             throw new NotFoundException('任务不存在');
+          }
+
+          const isTaskPrincipal = task.principalId === currentUserId;
+
+          const isProjectPrincipal =
+            task.project?.principalId === currentUserId;
+
+          if (!isTaskPrincipal && !isProjectPrincipal) {
+            throw new ForbiddenException(
+              '只有项目负责人或任务负责人可以编辑任务',
+            );
+          }
+
+          const principalChanged =
+            dto.principalId !== undefined &&
+            dto.principalId !== task.principalId;
+
+          const projectChanged =
+            dto.projectId !== undefined && dto.projectId !== task.projectId;
+
+          const relationshipChanged = principalChanged || projectChanged;
+
+          if (relationshipChanged && !isProjectPrincipal) {
+            throw new ForbiddenException(
+              '只有项目负责人可以修改任务负责人或所属项目',
+            );
+          }
+
+          const nextPrincipalId = dto.principalId ?? task.principalId;
+          const nextProjectId =
+            dto.projectId === undefined ? task.projectId : dto.projectId;
+
+          if (relationshipChanged && nextProjectId !== null) {
+            const targetProject = await tx.project.findUnique({
+              where: {
+                id: nextProjectId,
+              },
+              select: {
+                principalId: true,
+                members: {
+                  where: {
+                    userId: nextPrincipalId,
+                  },
+                  select: {
+                    userId: true,
+                  },
+                },
+              },
+            });
+
+            if (!targetProject) {
+              throw new BadRequestException('项目不存在');
+            }
+
+            if (projectChanged && targetProject.principalId !== currentUserId) {
+              throw new ForbiddenException(
+                '只有项目负责人才能把任务移入该项目',
+              );
+            }
+
+            if (targetProject.members.length === 0) {
+              throw new BadRequestException('任务负责人必须是目标项目成员');
+            }
           }
 
           const startTime =
@@ -421,10 +581,40 @@ export class TasksService {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, currentUserId: string): Promise<void> {
     try {
-      await this.prisma.task.delete({
-        where: { id },
+      await this.prisma.$transaction(async (tx) => {
+        const task = await tx.task.findUnique({
+          where: { id },
+          include: {
+            project: {
+              select: {
+                principalId: true,
+              },
+            },
+          },
+        });
+
+        if (!task) {
+          throw new NotFoundException('任务不存在');
+        }
+
+        const canDelete =
+          task.projectId === null
+            ? task.principalId === currentUserId
+            : task.project?.principalId === currentUserId;
+
+        if (!canDelete) {
+          throw new ForbiddenException(
+            task.projectId === null
+              ? '只有任务负责人可以删除独立任务'
+              : '只有项目负责人可以删除项目任务',
+          );
+        }
+
+        await tx.task.delete({
+          where: { id },
+        });
       });
     } catch (error) {
       if (

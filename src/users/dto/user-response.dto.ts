@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { SystemRole } from '../../generated/prisma/enums.js';
 
 export class UserResponseDto {
   @ApiProperty({
@@ -16,6 +17,12 @@ export class UserResponseDto {
 
   @ApiProperty({ example: 'developer' })
   role!: string;
+
+  @ApiProperty({
+    enum: SystemRole,
+    example: SystemRole.USER,
+  })
+  systemRole!: SystemRole;
 }
 
 export class UserListResponseDto {

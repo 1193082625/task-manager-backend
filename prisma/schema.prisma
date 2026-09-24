@@ -12,21 +12,52 @@ datasource db {
   provider = "postgresql"
 }
 
+enum SystemRole {
+  USER
+  ADMIN
+}
+
 // @@map("users) 数据库表名使用 users
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  phone     String @unique
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
   passwordHash String
-  role      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  role         String
+  systemRole   SystemRole @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // 关系字段，不会额外生成同名数据库列
   ownedProjects Project[] @relation("ProjectPrincipal")
   assignedTasks Task[]    @relation("TaskPrincipal")
 
+  projectMemberships ProjectMember[]
+
+  comments Comment[]
+
   @@map("users")
+}
+
+model ProjectMember {
+  projectId String
+  userId    String
+
+  // 表示当前 ProjectMember.projectId 对应 project.id
+  // onDelete: Cascade 表示删除项目时，自动删除这个项目的所有成员关系
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // onDelete: Restrict 表示 用户仍然是某个项目成员时，不允许直接删除这个用户
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // 复合主键，表示主键由两个字段共同组成：projectId + userId
+  // 查询时使用： where: {projectId_userId: { projectId, userId }}
+  @@id([projectId, userId])
+  // 复合主键会建立类似这样的索引：（projectId, userId），它适合查询：某个项目中是否有某个用户，某个项目有哪些成员，
+  // 但不太适合只按 userId 查询，所以额外增加 @@index([userId]) 帮助数据库快速处理： 张三加入了哪些项目
+  @@index([userId])
+  @@map("project_members")
 }
 
 enum ProjectStage {
@@ -62,7 +93,8 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tasks Task[]
+  tasks   Task[]
+  members ProjectMember[]
 
   // 为按负责任查询项目建立索引 
   @@index([principalId])
@@ -90,7 +122,26 @@ model Task {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
+  comments Comment[]
+
   @@index([principalId])
   @@index([projectId])
   @@map("tasks")
+}
+
+model Comment {
+  id      String @id @default(uuid())
+  content String @db.VarChar(2000)
+
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([taskId, createdAt])
+  @@index([authorId])
+  @@map("comments")
 }

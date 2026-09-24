@@ -8,9 +8,11 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from './public.decorator.js';
+import { SystemRole } from '../generated/prisma/enums.js';
 
 export interface JwtPayload {
   sub: string; // 当前用户 id
+  systemRole: SystemRole;
   iat?: number; // Token 签发时间
   exp?: number; // Token 过期时间
 }

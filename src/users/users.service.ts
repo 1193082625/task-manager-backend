@@ -44,6 +44,7 @@ export class UsersService {
           name: true,
           phone: true,
           role: true,
+          systemRole: true,
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       }),
@@ -73,6 +74,7 @@ export class UsersService {
           name: true,
           phone: true,
           role: true,
+          systemRole: true,
         },
       });
     } catch (error) {
@@ -94,6 +96,7 @@ export class UsersService {
         name: true,
         phone: true,
         role: true,
+        systemRole: true,
       },
     });
 
@@ -132,6 +135,7 @@ export class UsersService {
           name: true,
           phone: true,
           role: true,
+          systemRole: true,
         },
       });
     } catch (error) {
@@ -175,6 +179,7 @@ export class UsersService {
         name: true,
         phone: true,
         role: true,
+        systemRole: true,
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
     });
