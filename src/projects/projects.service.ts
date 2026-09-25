@@ -16,6 +16,8 @@ import { NotFoundException } from '@nestjs/common';
 import { QueryProjectsDto } from './dto/query-projects.dto.js';
 import { summarizeProjectTasks } from './project-task-summary.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
+import { ProjectMemberResponseDto } from './dto/project-member-response.dto.js';
+import { AddProjectMemberDto } from './dto/add-project-member.dto.js';
 
 // 告诉 prisma，查询项目时还要带哪些任务数据，可以把它理解为一份查询配置
 // 声明这个对象不会访问数据库，只有将它传给 findMany()、findUnique() 等方法并执行查询时，它才起作用
@@ -142,6 +144,230 @@ export class ProjectsService {
       throw new ForbiddenException('你不是该项目成员');
     }
     return this.toResponse(project);
+  }
+
+  async findMembers(
+    projectId: string,
+    currentUserId: string,
+  ): Promise<ProjectMemberResponseDto[]> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { principalId: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException('项目不存在');
+    }
+
+    const membership = await this.prisma.projectMember.findUnique({
+      where: {
+        projectId_userId: {
+          projectId,
+          userId: currentUserId,
+        },
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('你不是该项目成员');
+    }
+
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId },
+      select: {
+        userId: true,
+        createdAt: true,
+        user: {
+          select: {
+            name: true,
+            role: true,
+            isActive: true,
+          },
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { userId: 'asc' }],
+    });
+
+    return members.map((member) => ({
+      userId: member.userId,
+      name: member.user.name,
+      role: member.user.role,
+      isActive: member.user.isActive,
+      isPrincipal: member.userId === project.principalId,
+      joinedAt: member.createdAt.toISOString(),
+    }));
+  }
+
+  async addMember(
+    projectId: string,
+    dto: AddProjectMemberDto,
+    currentUserId: string,
+  ): Promise<ProjectMemberResponseDto> {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const project = await tx.project.findUnique({
+            where: { id: projectId },
+            select: { principalId: true },
+          });
+
+          if (!project) {
+            throw new NotFoundException('项目不存在');
+          }
+
+          if (project.principalId !== currentUserId) {
+            throw new ForbiddenException('只有项目负责人可以添加成员');
+          }
+
+          const existingMember = await tx.projectMember.findUnique({
+            where: {
+              projectId_userId: {
+                projectId,
+                userId: dto.userId,
+              },
+            },
+            select: { userId: true },
+          });
+
+          if (existingMember) {
+            throw new ConflictException('该用户已是项目成员');
+          }
+
+          const user = await tx.user.findUnique({
+            where: { id: dto.userId },
+            select: {
+              id: true,
+              name: true,
+              role: true,
+              isActive: true,
+            },
+          });
+
+          if (!user) {
+            throw new BadRequestException('用户不存在，请重新选择');
+          }
+
+          if (!user.isActive) {
+            throw new BadRequestException('不能添加已停用的用户');
+          }
+
+          const member = await tx.projectMember.create({
+            data: {
+              projectId,
+              userId: user.id,
+            },
+          });
+
+          return {
+            userId: member.userId,
+            name: user.name,
+            role: user.role,
+            isActive: user.isActive,
+            isPrincipal: member.userId === project.principalId,
+            joinedAt: member.createdAt.toISOString(),
+          };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2002') {
+          throw new ConflictException('该用户已是项目成员');
+        }
+
+        if (error.code === 'P2034') {
+          throw new ConflictException('项目或用户状态已发生变化，请刷新后重试');
+        }
+
+        if (error.code === 'P2003') {
+          throw new ConflictException('项目或用户已不存在，请刷新后重试');
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  async removeMember(
+    projectId: string,
+    userId: string,
+    currentUserId: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const project = await tx.project.findUnique({
+            where: { id: projectId },
+            select: { principalId: true },
+          });
+
+          if (!project) {
+            throw new NotFoundException('项目不存在');
+          }
+
+          if (project.principalId !== currentUserId) {
+            throw new ForbiddenException('只有项目负责人可以移除成员');
+          }
+
+          if (userId === project.principalId) {
+            throw new ConflictException('不能移除项目负责人');
+          }
+
+          const membership = await tx.projectMember.findUnique({
+            where: {
+              projectId_userId: {
+                projectId,
+                userId,
+              },
+            },
+            select: { userId: true },
+          });
+
+          if (!membership) {
+            throw new NotFoundException('该用户不是项目成员');
+          }
+
+          const assignedTask = await tx.task.findFirst({
+            where: {
+              projectId,
+              principalId: userId,
+            },
+            select: { id: true },
+          });
+
+          if (assignedTask) {
+            throw new ConflictException(
+              '该成员仍是项目内任务的负责人，请先转移任务',
+            );
+          }
+
+          await tx.projectMember.delete({
+            where: {
+              projectId_userId: {
+                projectId,
+                userId,
+              },
+            },
+          });
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025' || error.code === 'P2034') {
+          throw new ConflictException('项目或成员状态已发生变化，请刷新后重试');
+        }
+      }
+
+      throw error;
+    }
   }
 
   async findAll(

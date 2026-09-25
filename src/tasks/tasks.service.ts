@@ -43,7 +43,10 @@ export class TasksService {
     };
   }
 
-  async create(dto: CreateTaskDto, currentUserId: string) {
+  async create(
+    dto: CreateTaskDto,
+    currentUserId: string,
+  ): Promise<TaskResponseDto> {
     const startTime = new Date(dto.startTime);
     const endTime = new Date(dto.endTime);
 
@@ -58,70 +61,82 @@ export class TasksService {
       throw new BadRequestException('结束时间不能早于开始时间');
     }
 
-    const principal = await this.prisma.user.findUnique({
-      where: { id: dto.principalId },
-      select: { id: true },
-    });
-
-    if (!principal) {
-      throw new BadRequestException('负责人不存在，请重新选择');
-    }
-
-    if (dto.projectId === null || dto.projectId === undefined) {
-      if (dto.principalId !== currentUserId) {
-        throw new ForbiddenException('独立任务只能分配给自己');
-      }
-    } else {
-      const project = await this.prisma.project.findUnique({
-        where: { id: dto.projectId },
-        select: {
-          members: {
-            where: {
-              userId: {
-                in: [currentUserId, dto.principalId],
-              },
-            },
-            select: {
-              userId: true,
-            },
-          },
-        },
-      });
-
-      if (!project) {
-        throw new BadRequestException('项目不存在，请重新选择');
-      }
-
-      const memberIds = new Set(project.members.map((member) => member.userId));
-      if (!memberIds.has(currentUserId)) {
-        throw new ForbiddenException('你不是该项目成员，不能创建任务');
-      }
-
-      if (!memberIds.has(dto.principalId)) {
-        throw new BadRequestException('任务负责人必须是项目成员');
-      }
-    }
-
     try {
-      const task = await this.prisma.task.create({
-        data: {
-          name: dto.name.trim(),
-          description: dto.description ?? '',
-          principalId: dto.principalId,
-          projectId: dto.projectId ?? null,
-          startTime,
-          endTime,
-        },
-      });
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const principal = await tx.user.findUnique({
+            where: { id: dto.principalId },
+            select: { id: true },
+          });
 
-      return this.toResponse(task);
+          if (!principal) {
+            throw new BadRequestException('负责人不存在，请重新选择');
+          }
+
+          if (dto.projectId === null || dto.projectId === undefined) {
+            if (dto.principalId !== currentUserId) {
+              throw new ForbiddenException('独立任务只能分配给自己');
+            }
+          } else {
+            const project = await tx.project.findUnique({
+              where: { id: dto.projectId },
+              select: {
+                members: {
+                  where: {
+                    userId: {
+                      in: [currentUserId, dto.principalId],
+                    },
+                  },
+                  select: { userId: true },
+                },
+              },
+            });
+
+            if (!project) {
+              throw new BadRequestException('项目不存在，请重新选择');
+            }
+
+            const memberIds = new Set(
+              project.members.map((member) => member.userId),
+            );
+
+            if (!memberIds.has(currentUserId)) {
+              throw new ForbiddenException('你不是该项目成员，不能创建任务');
+            }
+
+            if (!memberIds.has(dto.principalId)) {
+              throw new BadRequestException('任务负责人必须是项目成员');
+            }
+          }
+
+          const task = await tx.task.create({
+            data: {
+              name: dto.name.trim(),
+              description: dto.description ?? '',
+              principalId: dto.principalId,
+              projectId: dto.projectId ?? null,
+              startTime,
+              endTime,
+            },
+          });
+
+          return this.toResponse(task);
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2003'
-      ) {
-        throw new BadRequestException('负责人或项目已不存在，请刷新后重试');
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2003') {
+          throw new BadRequestException('负责人或项目已不存在，请刷新后重试');
+        }
+
+        if (error.code === 'P2034') {
+          throw new ConflictException('项目或成员状态已发生变化，请刷新后重试');
+        }
       }
+
       throw error;
     }
   }

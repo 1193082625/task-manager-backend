@@ -32,6 +32,8 @@ import {
 import { QueryProjectsDto } from './dto/query-projects.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
 import { CurrentUserId } from '../auth/current-user-id.decorator.js';
+import { ProjectMemberResponseDto } from './dto/project-member-response.dto.js';
+import { AddProjectMemberDto } from './dto/add-project-member.dto.js';
 
 @ApiTags('项目管理')
 @Controller('projects')
@@ -56,6 +58,66 @@ export class ProjectsController {
   })
   findAllOptions(@CurrentUserId() currentUserId: string) {
     return this.projectsService.findAllOptions(currentUserId);
+  }
+
+  @Get(':projectId/members')
+  @ApiOperation({ summary: '查询项目成员列表' })
+  @ApiParam({ name: 'projectId', type: String, format: 'uuid' })
+  @ApiOkResponse({
+    type: ProjectMemberResponseDto,
+    isArray: true,
+  })
+  @ApiBadRequestResponse({ description: '项目 ID 格式不正确' })
+  @ApiNotFoundResponse({ description: '项目不存在' })
+  @ApiForbiddenResponse({ description: '当前用户不是项目成员' })
+  findMembers(
+    @CurrentUserId() currentUserId: string,
+    @Param('projectId', new ParseUUIDPipe()) projectId: string,
+  ): Promise<ProjectMemberResponseDto[]> {
+    return this.projectsService.findMembers(projectId, currentUserId);
+  }
+
+  @Post(':projectId/members')
+  @ApiOperation({ summary: '添加项目成员' })
+  @ApiParam({ name: 'projectId', type: String, format: 'uuid' })
+  @ApiCreatedResponse({
+    description: '成员添加成功',
+    type: ProjectMemberResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: '参数不合法、用户不存在或用户已停用',
+  })
+  @ApiNotFoundResponse({ description: '项目不存在' })
+  @ApiForbiddenResponse({ description: '只有项目负责人可以添加成员' })
+  @ApiConflictResponse({
+    description: '用户已是项目成员，或并发修改冲突',
+  })
+  addMember(
+    @CurrentUserId() currentUserId: string,
+    @Param('projectId', new ParseUUIDPipe()) projectId: string,
+    @Body() dto: AddProjectMemberDto,
+  ): Promise<ProjectMemberResponseDto> {
+    return this.projectsService.addMember(projectId, dto, currentUserId);
+  }
+
+  @Delete(':projectId/members/:userId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: '移除项目成员' })
+  @ApiParam({ name: 'projectId', type: String, format: 'uuid' })
+  @ApiParam({ name: 'userId', type: String, format: 'uuid' })
+  @ApiNoContentResponse({ description: '成员移除成功，无响应体' })
+  @ApiBadRequestResponse({ description: '项目 ID 或用户 ID 格式不正确' })
+  @ApiNotFoundResponse({ description: '项目不存在或该用户不是项目成员' })
+  @ApiForbiddenResponse({ description: '只有项目负责人可以移除成员' })
+  @ApiConflictResponse({
+    description: '不能移除项目负责人、成员仍负责任务，或并发修改冲突',
+  })
+  removeMember(
+    @CurrentUserId() currentUserId: string,
+    @Param('projectId', new ParseUUIDPipe()) projectId: string,
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+  ): Promise<void> {
+    return this.projectsService.removeMember(projectId, userId, currentUserId);
   }
 
   @Get(':id')
