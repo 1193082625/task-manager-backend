@@ -10,6 +10,7 @@ import {
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -21,6 +22,8 @@ import { LoginDto } from './dto/login.dto.js';
 import { type AuthenticatedRequest } from './jwt-auth.guard.js';
 import { UserResponseDto } from '../users/dto/user-response.dto.js';
 import { Public } from './public.decorator.js';
+import { CurrentUserId } from './current-user-id.decorator.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 
 @ApiTags('认证')
 @Controller('auth')
@@ -47,5 +50,25 @@ export class AuthController {
     @Req() request: AuthenticatedRequest,
   ): Promise<UserResponseDto> {
     return this.authService.getCurrentUser(request.user.sub);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '修改当前用户密码' })
+  @ApiNoContentResponse({
+    description: '密码修改成功，现有登录状态全部失效',
+  })
+  @ApiBadRequestResponse({
+    description: '密码格式不正确、当前密码错误，或新旧密码相同',
+  })
+  @ApiUnauthorizedResponse({
+    description: '未登录或 Token 已失效',
+  })
+  async changePassword(
+    @CurrentUserId() currentUserId: string,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<void> {
+    await this.authService.changePassword(currentUserId, dto);
   }
 }

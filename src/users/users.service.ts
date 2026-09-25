@@ -7,9 +7,11 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { QueryUsersDto } from './dto/query.users.dto.js';
-import { Prisma } from '../generated/prisma/client.js';
+import { Prisma, SystemRole } from '../generated/prisma/client.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 import * as argon2 from 'argon2';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto.js';
 
 @Injectable()
 export class UsersService {
@@ -45,6 +47,7 @@ export class UsersService {
           phone: true,
           role: true,
           systemRole: true,
+          isActive: true,
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       }),
@@ -75,6 +78,7 @@ export class UsersService {
           phone: true,
           role: true,
           systemRole: true,
+          isActive: true,
         },
       });
     } catch (error) {
@@ -97,6 +101,7 @@ export class UsersService {
         phone: true,
         role: true,
         systemRole: true,
+        isActive: true,
       },
     });
 
@@ -136,6 +141,7 @@ export class UsersService {
           phone: true,
           role: true,
           systemRole: true,
+          isActive: true,
         },
       });
     } catch (error) {
@@ -149,7 +155,35 @@ export class UsersService {
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string, currentUserId: string): Promise<void> {
+    if (id === currentUserId) {
+      throw new BadRequestException('不能删除自己的账号');
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        systemRole: true,
+        isActive: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    if (user.systemRole === SystemRole.ADMIN && user.isActive) {
+      const activeAdminCount = await this.prisma.user.count({
+        where: {
+          systemRole: SystemRole.ADMIN,
+          isActive: true,
+        },
+      });
+
+      if (activeAdminCount <= 1) {
+        throw new ConflictException('不能删除最后一个启用的管理员');
+      }
+    }
+
     try {
       await this.prisma.user.delete({
         where: { id },
@@ -180,8 +214,94 @@ export class UsersService {
         phone: true,
         role: true,
         systemRole: true,
+        isActive: true,
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+  }
+
+  async resetPassword(id: string, dto: ResetPasswordDto): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const passwordHash = await argon2.hash(dto.newPassword, {
+      type: argon2.argon2id,
+    });
+
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash,
+        tokenVersion: {
+          increment: 1,
+        },
+      },
+    });
+  }
+
+  async updateStatus(
+    id: string,
+    currentUserId: string,
+    dto: UpdateUserStatusDto,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        systemRole: true,
+        isActive: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    // 状态相同，按幂等操作直接成功
+    if (user.isActive === dto.isActive) {
+      return;
+    }
+
+    if (!dto.isActive && id === currentUserId) {
+      throw new BadRequestException('不能停用自己的账号');
+    }
+
+    if (!dto.isActive && user.systemRole === SystemRole.ADMIN) {
+      const activeAdminCount = await this.prisma.user.count({
+        where: {
+          systemRole: SystemRole.ADMIN,
+          isActive: true,
+        },
+      });
+
+      if (activeAdminCount <= 1) {
+        throw new ConflictException('不能停用最后一个管理员');
+      }
+    }
+
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        isActive: dto.isActive,
+        // 停用时让用户所有现有 JWT 立即失效
+        ...(!dto.isActive
+          ? {
+              tokenVersion: {
+                increment: 1,
+              },
+            }
+          : {}),
+      },
     });
   }
 }

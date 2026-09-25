@@ -23,6 +23,12 @@ export class UserResponseDto {
     example: SystemRole.USER,
   })
   systemRole!: SystemRole;
+
+  @ApiProperty({
+    description: '账号是否启用',
+    example: true,
+  })
+  isActive!: boolean;
 }
 
 export class UserListResponseDto {

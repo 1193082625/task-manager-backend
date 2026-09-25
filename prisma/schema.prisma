@@ -25,6 +25,11 @@ model User {
   passwordHash String
   role         String
   systemRole   SystemRole @default(USER)
+
+  isActive     Boolean @default(true)
+  // JWT 签发时记录该版本，修改密码、重置密码时加1，旧 JWT 因版本不匹配而失效
+  tokenVersion Int @default(0)
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

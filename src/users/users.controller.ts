@@ -23,6 +23,8 @@ import {
   ApiParam,
   ApiNoContentResponse,
   ApiConflictResponse,
+  ApiUnauthorizedResponse,
+  ApiForbiddenResponse,
 } from '@nestjs/swagger';
 import {
   UserListResponseDto,
@@ -32,6 +34,9 @@ import { QueryUsersDto } from './dto/query.users.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { SystemRole } from '../generated/prisma/enums.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { CurrentUserId } from '../auth/current-user-id.decorator.js';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto.js';
 
 @ApiTags('用户管理')
 @Roles(SystemRole.ADMIN)
@@ -101,7 +106,74 @@ export class UsersController {
   @ApiBadRequestResponse({ description: '用户 ID 格式不正确' })
   @ApiNotFoundResponse({ description: '用户不存在' })
   @ApiConflictResponse({ description: '用户仍有关联数据，无法删除' })
-  async remove(@Param('id', new ParseUUIDPipe()) id: string) {
-    await this.usersService.remove(id);
+  @ApiBadRequestResponse({
+    description: '用户 ID 不合法，或试图删除自己的账号',
+  })
+  @ApiConflictResponse({
+    description: '用户仍有关联数据，或是最后一个启用的管理员',
+  })
+  async remove(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUserId() currentUserId: string,
+  ): Promise<void> {
+    await this.usersService.remove(id, currentUserId);
+  }
+
+  @Patch(':id/reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: '管理员重置用户密码' })
+  @ApiParam({
+    name: 'id',
+    type: String,
+    format: 'uuid',
+  })
+  @ApiNoContentResponse({
+    description: '密码重置成功，用户现有登录状态全部失效',
+  })
+  @ApiBadRequestResponse({
+    description: '用户 ID 或新密码格式不正确',
+  })
+  @ApiUnauthorizedResponse({
+    description: '未登录或 Token 已失效',
+  })
+  @ApiForbiddenResponse({
+    description: '只有管理员可以重置密码',
+  })
+  @ApiNotFoundResponse({
+    description: '用户不存在',
+  })
+  async resetPassword(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ResetPasswordDto,
+  ): Promise<void> {
+    await this.usersService.resetPassword(id, dto);
+  }
+
+  @Patch(':id/status')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: '启用或停用用户账号' })
+  @ApiParam({
+    name: 'id',
+    type: String,
+    format: 'uuid',
+  })
+  @ApiNoContentResponse({
+    description: '账号状态修改成功',
+  })
+  @ApiBadRequestResponse({
+    description: '参数错误，或试图停用自己的账号',
+  })
+  @ApiConflictResponse({
+    description: '不能停用最后一个管理员',
+  })
+  @ApiNotFoundResponse({
+    description: '用户不存在',
+  })
+  async updateStatus(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUserId() currentUserId: string,
+    @Body() dto: UpdateUserStatusDto,
+  ): Promise<void> {
+    await this.usersService.updateStatus(id, currentUserId, dto);
   }
 }

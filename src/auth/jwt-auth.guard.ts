@@ -8,11 +8,13 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from './public.decorator.js';
-import { SystemRole } from '../generated/prisma/enums.js';
+import type { SystemRole } from '../generated/prisma/enums.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 
 export interface JwtPayload {
   sub: string; // 当前用户 id
   systemRole: SystemRole;
+  tokenVersion: number;
   iat?: number; // Token 签发时间
   exp?: number; // Token 过期时间
 }
@@ -26,6 +28,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
+    private readonly prisma: PrismaService,
   ) {}
 
   // context 可以理解为 NestJS 对“当前正在执行的请求”的包装对象
@@ -47,12 +50,34 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('请先登录');
     }
 
+    let payload: JwtPayload;
     try {
-      request.user = await this.jwtService.verifyAsync<JwtPayload>(token);
-
-      return true;
+      payload = await this.jwtService.verifyAsync<JwtPayload>(token);
     } catch {
       throw new UnauthorizedException('登录状态已失效');
     }
+
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id: payload.sub,
+      },
+      select: {
+        systemRole: true,
+        isActive: true,
+        tokenVersion: true,
+      },
+    });
+
+    if (!user || !user.isActive || user.tokenVersion !== payload.tokenVersion) {
+      throw new UnauthorizedException('登录状态已失效');
+    }
+
+    request.user = {
+      ...payload,
+      // 使用数据库中的最新角色，不完全信任旧 token
+      systemRole: user.systemRole,
+    };
+
+    return true;
   }
 }
