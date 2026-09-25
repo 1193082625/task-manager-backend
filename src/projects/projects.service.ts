@@ -65,17 +65,23 @@ export class ProjectsService {
       throw new BadRequestException('结束日期不能早于开始日期');
     }
 
-    const principal = await this.prisma.user.findUnique({
-      where: { id: dto.principalId },
-      select: { id: true },
-    });
-
-    if (!principal) {
-      throw new BadRequestException('负责人不存在，请重新选择');
-    }
-
     try {
       const project = await this.prisma.$transaction(async (tx) => {
+        const principal = await tx.user.findUnique({
+          where: { id: dto.principalId },
+          select: {
+            id: true,
+            isActive: true,
+          },
+        });
+
+        if (!principal) {
+          throw new BadRequestException('负责人不存在，请重新选择');
+        }
+
+        if (!principal.isActive) {
+          throw new BadRequestException('不能选择已停用的用户作为项目负责人');
+        }
         const createdProject = await tx.project.create({
           data: {
             name: dto.name.trim(),
@@ -545,17 +551,28 @@ export class ProjectsService {
             throw new ForbiddenException('只有项目负责人可以编辑项目');
           }
 
-          if (dto.principalId !== undefined) {
+          if (
+            dto.principalId !== undefined &&
+            dto.principalId !== project.principalId
+          ) {
             const principal = await tx.user.findUnique({
               where: { id: dto.principalId },
-              select: { id: true },
+              select: {
+                id: true,
+                isActive: true,
+              },
             });
 
             if (!principal) {
               throw new BadRequestException('负责人不存在');
             }
 
-            // upsert: 新负责人已经是成员则不做任何修改，新负责人不是成员，则创建 ProjectMember
+            if (!principal.isActive) {
+              throw new BadRequestException(
+                '不能选择已停用的用户作为项目负责人',
+              );
+            }
+
             await tx.projectMember.upsert({
               where: {
                 projectId_userId: {
@@ -589,16 +606,6 @@ export class ProjectsService {
 
           if (endTime.getTime() < startTime.getTime()) {
             throw new BadRequestException('结束日期不能早于开始日期');
-          }
-
-          if (dto.principalId !== undefined) {
-            const principal = await tx.user.findUnique({
-              where: { id: dto.principalId },
-              select: { id: true },
-            });
-            if (!principal) {
-              throw new BadRequestException('负责人不存在');
-            }
           }
 
           const data: Prisma.ProjectUpdateInput = {};
