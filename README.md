@@ -27,6 +27,10 @@
 
 ## Project setup
 
+This project is verified with Node.js 22 LTS. Node.js 23 currently causes the
+Nest CLI build to fail while loading its ESM dependencies. If you use nvm, run
+`nvm use` before installing dependencies or building.
+
 ```bash
 $ pnpm install
 ```
